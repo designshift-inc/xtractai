@@ -1,4 +1,4 @@
 streamlit
 openai
-pypdf2
+PyPDF2
 pandas
