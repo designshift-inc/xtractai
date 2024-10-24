@@ -1,0 +1,5 @@
+/data/
+/memo/
+__pycache__/
+.DS_Store
+/src/config.py
