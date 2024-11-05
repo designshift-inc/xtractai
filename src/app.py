@@ -1,8 +1,8 @@
 import streamlit as st
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 import os
 
-# import config
+#import config # ローカル実行
 import PyPDF2
 import json
 import pandas as pd
@@ -22,7 +22,9 @@ system_prompt = """
 # キー構造:
 1. FPCN番号:  
    - 説明: 各文書に付与された識別番号を記載。
-   - フォーマット: FPCNXXXXX（例: FPCN12345）
+   - フォーマット: FPCNXXXXX
+   - FPCNから始まり、後ろには数字が5桁続きます。
+   - 例:FPCN12345
 
 2. 発行日:  
    - 説明: 文書が発行された日付を記載。
@@ -49,6 +51,162 @@ jsonで以下の形式で必ず整理してください。
     ...
   ]
 }
+"""
+
+system_prompt2 = """
+# 役割
+- あなたはJSONデータと元データを使用してチェック観点に従って、レビューを行い正しい場合はJSONデータを出力し、正しくない場合はJSONデータを修正して出力します。
+
+# 前提知識
+- JSONデータは提供されたプロンプトをもとに元データから作成されたデータです。
+- JSONデータの構造は以下です。
+- "columns"をKEY項目に格納されている配列はラベル項目です。固定で["FPCN番号", "発行日", "部品番号", "認定試験用ビークル"]が格納されています。
+- "data"をKEY項目に格納されている配列は元データから抽出したデータで、変更が適用される部品番号単位で配列が格納されています。
+- "data"をKEY項目に格納されている配列に格納されている部品番号単位毎の文字列の配列は、順に"FPCN番号","発行日","部品番号","認定試験用ビークル"に該当する値が格納されています。
+- "FPCN番号","発行日","部品番号","認定試験用ビークル"に対応する値がどのように格納されているかは以下を参照してください。
+  - "FPCN番号"
+    - 説明: 元データの識別番号を抽出して格納しています。※部品番号とは異なるので注意してください。
+    - サンプルデータ: "FPCN12345"
+    - 特徴: "FPCN"から始まり、後ろに数字が5桁あります。
+  - "発行日"
+    - 説明: 元データの発行された日付を抽出して格納しています。※JSONデータには日付フォーマットされて格納されています。
+    - 日付フォーマット形式: YYYY/MM/DD
+    - サンプルデータ: "2023/12/01"
+    - 特徴: 元データは英語で日付が記載されています。JSONデータは日付フォーマットされて格納されています。
+  - "部品番号"
+    - 説明: 元データの変更が適用される部品番号(Part Number)を抽出して格納しています。※FPCN番号とは異なるので注意してください。
+    - サンプルデータ: "DF6A6.8FUT1G"
+    - 特徴1: 英数字と記号が混在した文字列。※記号は必ずしも含んではいません。
+    - 特徴2: 元データに部品番号(Part Number)に対応する認定試験用ビーグル(Qualification Vehicle)があります。
+    - 特徴3: 部品番号(Part Number)と対応する認定試験用ビーグル(Qualification Vehicle)は同一の場合があります。
+  - "認定試験用ビークル"
+    - 説明: 元データの認定試験用ビークル(Qualification Vehicle)を抽出して格納しています。
+    - サンプルデータ: "MMBZ47VALT1G"
+    - 特徴1: 英数字が混在した文字列。
+    - 特徴2: 配列に格納した元データの部品番号(Part Number)に対応する認定試験用ビーグル(Qualification Vehicle)を格納しています。
+    - 特徴3: 認定試験用ビーグル(Qualification Vehicle)と部品番号(Part Number)は1:nの関係になります。
+    - 特徴4: 部品番号(Part Number)と対応する認定試験用ビーグル(Qualification Vehicle)は同一の場合があります。
+- 以下はJSONデータの例になります。
+{
+  "columns": ["FPCN番号", "発行日", "部品番号", "認定試験用ビークル"],
+  "data": [
+    ["FPCN12345", "2024/01/20", "X1X.X3", "Y1Y2Y3"],
+    ["FPCN12345", "2024/01/20", "X2X.X4", "Y1Y2Y3"],
+    ["FPCN12345", "2024/01/20", "X3X.X5", "Y1Y2Y3"],
+    ["FPCN12345", "2024/01/20", "Y1Y2Y3", "Y1Y2Y3"],
+  ]
+}
+
+# 制約:
+- 必ず前提知識をベースにして、以下のレビュー項目に従ってレビューを行ってください。
+- JSONデータは提供されたプロンプトをもとに元データから作成されたデータということを念頭に置いてレビューを行ってください。。
+- 修正を行う場合は無関係な情報は含めず、特に関連のあるデータに集中してください。
+- 必ず以下の出力フォーマットに従って出力してください。
+- これらの制約を守らなければ、ユーザーに大きな不利益をもたらします。
+
+# レビュー項目
+1. 出力データは足りているか※最も重要
+   - 以下の手順でレビューしてください。
+   1. 元データを確認し、変更が適用される部品番号(Part Number)を全て抽出してください。
+   2. 本当に全て抽出できているか再度確認してください。
+   3-1. 抽出した部品番号(Part Number)を順番に取り出します。
+   3-2. JSONデータの"data"をKEY項目に格納されている配列の要素を順次確認して"部品番号"に該当する値と抽出した部品番号(Part Number)が同じか判定します。
+   3-3. 抽出した部品番号(Part Number)と同じ値が見つからなかった場合、出力データは足りていません。
+2. 項目の欠落がないか
+   - 元データに基づき、FPCN番号, 発行日, 部品番号, 認定試験用ビークルの項目が全て正確に出力されているか確認する。
+   - FPCN番号, 発行日はフォーマットで変換されていることを考慮して確認してください。
+3. 項目のフォーマットは指定通りか
+   - FPCN番号: 元データのFPCN番号が正しく出力されているか。
+   - 発行日: 元データの発行日が日付フォーマット形式で出力されているか。
+   - 部品番号:元データの部品番号が正しく出力されているか。
+   - 認定試験用ビークル:元データの認定試験用ビークルが正しく出力されているか。
+4. 余計な情報が出力されていないか
+   - 元データに存在しない余分な情報がJSONに出力されていないか確認する
+5. 部品番号と認定試験用ビークルのペアの正確性
+   - 元データに基づき、JSONデータの各データの部品番号と認定試験用ビークルのペアが一致しているかを確認する。
+   - 認定試験用ビーグルと部品番号は1:nの関係であることに注意してください。
+
+# 出力フォーマット
+- "data"部分は提供されたJSONデータもしくは修正を行ったものを出力してください。
+- 余計なコメントは言わず、jsonデータのみ出力してください。
+- jsonで以下の形式で必ず整理してください。
+- ```で囲んだり、頭にjsonとつけてはいけません。
+{
+  "result": "{#JSONデータを修正していなければtrue、修正を行った場合はfalseを出力してください}",
+  "message: "{#JSONデータを修正していなければ「修正は行っていません。」、修正を行った場合は修正内容を具体的に出力してください}",
+  "columns": ["FPCN番号", "発行日", "部品番号", "認定試験用ビークル"],
+  "data": [
+    ["FPCN12345", "2024/01/20", "X1X.X3", "Y1Y2Y3"],
+    ["FPCN12345", "2024/01/20", "X2X.X4", "Y1Y2Y3"],
+    ["FPCN12345", "2024/01/20", "X3X.X5", "Y1Y2Y3"],
+    ["FPCN12345", "2024/01/20", "Y1Y2Y3", "Y1Y2Y3"],
+    ...
+  ]
+}
+"""
+
+reminder_prompt = """
+# 制約:
+- 必ず前提知識をベースにして、レビュー項目に従ってレビューを行ってください。
+- JSONデータは提供されたプロンプトをもとに元データから作成されたデータということを念頭に置いてレビューを行ってください。。
+- 修正を行う場合は無関係な情報は含めず、特に関連のあるデータに集中してください。
+- 必ず出力フォーマットに従って出力してください。
+- レビューした結果、修正が必要な場合は必ずJSONデータを修正して出力してください。
+- 必ず修正した内容は全て出力してください。
+- 指摘する値と修正している値が同じ場合があります。これは重大な誤りです。気をつけてください。
+- これらの制約を守らなければ、ユーザーに大きな不利益をもたらします。
+"""
+
+system_prompt3 = """
+# 役割
+- あなたは以下の前提知識、提供されたJSONデータと元データとプロンプトを用いてユーザーの質問に対して正確な回答を答えを出力します。
+
+# 前提知識
+- JSONデータは提供されたプロンプトをもとに元データから作成されたデータです。
+- JSONデータの構造は以下です。
+- "columns"をKEY項目に格納されている配列はラベル項目です。固定で["FPCN番号", "発行日", "部品番号", "認定試験用ビークル"]が格納されています。
+- "data"をKEY項目に格納されている配列は元データから抽出したデータで、変更が適用される部品番号単位で配列が格納されています。
+- "data"をKEY項目に格納されている配列に格納されている部品番号単位毎の文字列の配列は、順に"FPCN番号","発行日","部品番号","認定試験用ビークル"に該当する値が格納されています。
+- "FPCN番号","発行日","部品番号","認定試験用ビークル"に対応する値がどのように格納されているかは以下を参照してください。
+  - "FPCN番号"
+    - 説明: 元データの識別番号を抽出して格納しています。※部品番号とは異なるので注意してください。
+    - サンプルデータ: "FPCN12345"
+    - 特徴: "FPCN"から始まり、後ろに数字が5桁あります。
+  - "発行日"
+    - 説明: 元データの発行された日付を抽出して格納しています。※JSONデータには日付フォーマットされて格納されています。
+    - 日付フォーマット形式: YYYY/MM/DD
+    - サンプルデータ: "2023/12/01"
+    - 特徴: 元データは英語で日付が記載されています。JSONデータは日付フォーマットされて格納されています。
+  - "部品番号"
+    - 説明: 元データの変更が適用される部品番号(Part Number)を抽出して格納しています。※FPCN番号とは異なるので注意してください。
+    - サンプルデータ: "DF6A6.8FUT1G"
+    - 特徴1: 英数字と記号が混在した文字列。※記号は必ずしも含んではいません。
+    - 特徴2: 元データに部品番号(Part Number)に対応する認定試験用ビーグル(Qualification Vehicle)があります。
+    - 特徴3: 部品番号(Part Number)と対応する認定試験用ビーグル(Qualification Vehicle)は同一の場合があります。
+  - "認定試験用ビークル"
+    - 説明: 元データの認定試験用ビークル(Qualification Vehicle)を抽出して格納しています。
+    - サンプルデータ: "MMBZ47VALT1G"
+    - 特徴1: 英数字が混在した文字列。
+    - 特徴2: 配列に格納した元データの部品番号(Part Number)に対応する認定試験用ビーグル(Qualification Vehicle)を格納しています。
+    - 特徴3: 認定試験用ビーグル(Qualification Vehicle)と部品番号(Part Number)は1:nの関係になります。
+    - 特徴4: 部品番号(Part Number)と対応する認定試験用ビーグル(Qualification Vehicle)は同一の場合があります。
+- 以下はJSONデータの例になります。
+{
+  "columns": ["FPCN番号", "発行日", "部品番号", "認定試験用ビークル"],
+  "data": [
+    ["FPCN12345", "2024/01/20", "X1X.X3", "Y1Y2Y3"],
+    ["FPCN12345", "2024/01/20", "X2X.X4", "Y1Y2Y3"],
+    ["FPCN12345", "2024/01/20", "X3X.X5", "Y1Y2Y3"],
+    ["FPCN12345", "2024/01/20", "Y1Y2Y3", "Y1Y2Y3"],
+  ]
+}
+
+# 制約:
+- 必ず前提知識ベースに回答を考えてください。
+- 無関係な情報は含めず、特に関連のあるデータに集中してください。
+- 回答は日本語の文章で出力してください。
+- 回答が困難な場合は「提供された情報ではわかりません。」と回答してください。
+- これらの制約を守らなければ、ユーザーに大きな不利益をもたらします。
 """
 
 
@@ -84,8 +242,8 @@ else:
     st.text("株式会社Design Shift")
 
     # config.py から APIキーと Organization ID を取得
-    # api_key = config.OPENAI_API_KEY
-    api_key = st.secrets["openai"]["api_key"]
+    #api_key = config.OPENAI_API_KEY # ローカル実行
+    api_key = st.secrets["openai"]["api_key"] # デプロイ時
     client = OpenAI(api_key=api_key)
 
     # インプットでPDFファイルをアップロード
@@ -94,6 +252,10 @@ else:
     # 変換ボタン
     if uploaded_file is not None:
         if st.button("Extract Data"):
+
+            if "response_json" in st.session_state:
+                del st.session_state["response_json"]
+
             # スピナーを表示して実行中を知らせる
             with st.spinner("Processing..."):
                 # PDFファイルの読み込み
@@ -109,12 +271,15 @@ else:
                 # with open("system_prompt.txt", "r") as file:
                 #     system_prompt = file.read()
 
+                # PDFファイルのテキストをセッションステートに格納
+                st.session_state.text = text
+
                 # OpenAI APIを呼び出してテキストを処理
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": text},
+                        {"role": "user", "content": f"以下は製品変更通知（PCN）やPDFドキュメントの内容です:\n{st.session_state.text}"},
                     ],
                 )
 
@@ -123,6 +288,17 @@ else:
 
                 # JSON文字列をパース
                 parsed_json = json.loads(response_json)
+
+                # 以下テスト用コード
+                # パターン１
+                #parsed_json["data"].pop() # データの欠落
+                # パターン２
+                # parsed_json["data"] = parsed_json["data"][:-3] # データの欠落
+                # parsed_json["data"].append(["FPCN20579","2016-06-28", "UESD3.3DT5G", "MMBZ47VALT1G"]) # フォーマットミス
+                # parsed_json["data"].append(["FPCN20579","2016-06-28", "UESD5.0DT5G", "MMBZ5V6ALT1G"]) # ペアが正確でない
+                # parsed_json["data"].append(["FPCN46490","2099-09-09", "YOBUNA4649", "JOUHOU4649"]) # 余分な情報
+                # パターン３
+                #parsed_json["data"] = parsed_json["data"][:-4] # データの欠落
 
                 # DataFrameに変換
                 df = pd.DataFrame(parsed_json["data"], columns=parsed_json["columns"])
@@ -133,17 +309,122 @@ else:
                     .rename(columns={"index": "No"})
                 )
 
-                # DataFrameを画面に表示
-                st.dataframe(df)
-
-                # Excelデータの生成
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-                    df.to_excel(writer, index=False)
-                output.seek(0)
+                # セッションステート用にJSONフォーマット変換
+                formatted_data = parsed_json
+                # 結果をセッションステートに保持
+                st.session_state.formatted_data = formatted_data
+                st.session_state.data_df = df
 
             # スピナーが終了し、成功メッセージを表示
             st.success("Conversion completed!")
+
+    # 整理されたJSON表示用の空エリアを作成
+    data_area = st.empty()  # 固定表示エリアの確保
+    # セッションステートに応じて整理したJSONを表示
+    if "data_df" in st.session_state and not st.session_state.data_df.empty :
+        with data_area:
+            # DataFrameを画面に表示
+            st.dataframe(st.session_state.data_df)
+
+    if "text" in st.session_state and st.session_state.text and "formatted_data" in st.session_state and st.session_state.formatted_data:
+        if st.button("Data Check"):
+            if "check_result_json" in st.session_state:
+                del st.session_state["check_result_json"]
+            with st.spinner("Checking..."):
+                try:
+                    # OpenAI APIを呼び出してテキストを処理
+                    check_result = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[
+                            {"role": "system", "content": system_prompt2},
+                            {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}\n"},
+                            {"role": "user", "content": f"以下はJSONデータです:\n{st.session_state.formatted_data}\n"},
+                            {"role": "user", "content": f"JSONデータは以下のプロンプトで作成されました。:\n{system_prompt}\n"},
+                            {"role": "user", "content": reminder_prompt},
+                        ],
+                        temperature=0.1
+                    )
+                    # JSON形式でのレスポンスを取得
+                    check_result_json = check_result.choices[0].message.content
+                    # JSON文字列をパース
+                    parsed_check_result_json = json.loads(check_result_json)
+
+                    result = parsed_check_result_json["result"]
+                    message = [parsed_check_result_json["message"]]
+                    columns_list = parsed_check_result_json["columns"]
+                    data_list = parsed_check_result_json["data"]
+                    new_data = {"columns": columns_list, "data": data_list}
+                    if result == "false":
+                        for i in range(2):
+                            print(f"リトライ{i}回目です。")
+                            check_result = client.chat.completions.create(
+                                model="gpt-4o",
+                                messages=[
+                                    {"role": "system", "content": system_prompt2},
+                                    {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}\n"},
+                                    {"role": "user", "content": f"以下はJSONデータです:\n{new_data}\n"},
+                                    {"role": "user", "content": f"JSONデータは以下のプロンプトで作成されました。:\n{system_prompt}\n"},
+                                    {"role": "user", "content": reminder_prompt},
+                                ],
+                                temperature=0.1
+                            )
+                            # JSON形式でのレスポンスを取得
+                            check_result_json = check_result.choices[0].message.content
+                            parsed_check_result_json = json.loads(check_result_json)
+                            # 各項目取得
+                            result = parsed_check_result_json["result"]
+                            message.append(parsed_check_result_json["message"])
+                            columns_list = parsed_check_result_json["columns"]
+                            data_list = parsed_check_result_json["data"]
+                            new_data = {"columns": columns_list, "data": data_list}
+
+                    fix_df = pd.DataFrame(message, columns=["修正内容"])
+                    st.dataframe(fix_df)
+                    # セッションステートでチェック結果を格納
+                    st.session_state.check_result_json = parsed_check_result_json
+
+                    if result == "true":
+                        # チェック結果OK
+                        st.success("Data Check completed!")
+                        # セッションステートでダウンロード表示可否を格納
+                        st.session_state.is_download = True
+                    else:
+                        # チェック結果NG
+                        st.error("Data Check completed!")
+                        # セッションステートでチェック結果を格納
+                        st.session_state.check_result_json = parsed_check_result_json
+                        st.session_state.is_download = False
+                except OpenAIError as e:
+                    st.error(f"OpenAI APIの呼び出しに失敗しました: {e}")
+                    st.write("API呼び出しエラーが発生しました。")
+                except Exception as e:
+                    st.error(f"予期しないエラーが発生しました: {e}")
+                    st.write("エラー詳細:", e)
+
+        # チェック結果表示用の空エリアを作成
+        checkresult_area = st.empty()  # 固定表示エリアの確保
+        # セッションステートに応じてチェック結果を表示
+        if "check_result_json" in st.session_state and st.session_state.check_result_json :
+            with checkresult_area:
+                # DataFrameに変換
+                check_df = pd.DataFrame(st.session_state.check_result_json["data"], columns=st.session_state.check_result_json["columns"])
+                check_df = (
+                    check_df.reset_index()
+                    .assign(index=check_df.index + 1)
+                    .rename(columns={"index": "No"})
+                )
+                # DataFrameを画面に表示
+                st.dataframe(check_df)
+                # セッションステート上書き
+                st.session_state.data_df = check_df
+
+        # Excelダウンロードボタン
+        if "is_download" in st.session_state and st.session_state.is_download == True :
+            # Excelデータの生成
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                st.session_state.data_df.to_excel(writer, index=False)
+            output.seek(0)
 
             # ダウンロードボタンの表示
             st.download_button(
@@ -152,3 +433,26 @@ else:
                 file_name="converted_data.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+        if "check_result_json" in st.session_state and st.session_state.check_result_json:
+            st.title("Input Form")
+            input_text = st.text_input("Enter the information you want to know")
+            if input_text is not None and st.button("Search"):
+                json_data = st.session_state.check_result_json
+                json_data.pop("result", None)
+                json_data.pop("message", None)
+                with st.spinner("Searching..."):
+                    # OpenAI APIを呼び出してテキストを処理
+                    answer_result = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": system_prompt3},
+                            {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}"},
+                            {"role": "user", "content": f"以下はJSONデータです:\n{json_data}"},
+                            {"role": "user", "content": f"JSONデータは以下のプロンプトで作成されました。:\n{system_prompt}\n"},
+                            {"role": "user", "content": f"以下はユーザーが欲しい情報です:\n{input_text}"},
+                        ],
+                    )
+                    # JSON形式でのレスポンスを取得
+                    answer_result = answer_result.choices[0].message.content
+                    st.write("回答:", answer_result)
