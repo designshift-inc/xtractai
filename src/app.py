@@ -111,9 +111,11 @@ system_prompt2 = """
    2. 本当に全て抽出できているか再度確認してください。
    3-1. 抽出した部品番号(Part Number)を順番に取り出します。
    3-2. JSONデータの"data"をKEY項目に格納されている配列の要素を順次確認して"部品番号"に該当する値と抽出した部品番号(Part Number)が同じか判定します。
-   3-3. 抽出した部品番号(Part Number)と同じ値が見つからなかった場合、出力データは足りていません。
+   3-3. 抽出した部品番号(Part Number)と同じ値が見つからなかった場合、その部品番号(Part Number)の出力データは足りていません。
+   4-1. 不足している部品番号(Part Number)があった場合、本当にその部品番号(Part Number)が元データに存在するか確認してください。
+   4-2. 存在する場合、その部品番号(Part Number)の出力データは足りていません。
 2. 項目の欠落がないか
-   - 元データに基づき、FPCN番号, 発行日, 部品番号, 認定試験用ビークルの項目が全て正確に出力されているか確認する。
+   - 元データに基づき、FPCN番号, 発行日, 部品番号, 認定試験用ビークルの項目が抜け漏れがなく全て出力されているか確認する。
    - FPCN番号, 発行日はフォーマットで変換されていることを考慮して確認してください。
 3. 項目のフォーマットは指定通りか
    - FPCN番号: 元データのFPCN番号が正しく出力されているか。
@@ -127,13 +129,27 @@ system_prompt2 = """
    - 認定試験用ビーグルと部品番号は1:nの関係であることに注意してください。
 
 # 出力フォーマット
+- "results"にはレビュー項目毎の結果を出力してください。
+- "message"にはレビュー項目毎の修正内容を出力してください。
 - "data"部分は提供されたJSONデータもしくは修正を行ったものを出力してください。
 - 余計なコメントは言わず、jsonデータのみ出力してください。
 - jsonで以下の形式で必ず整理してください。
 - ```で囲んだり、頭にjsonとつけてはいけません。
 {
-  "result": "{#JSONデータを修正していなければtrue、修正を行った場合はfalseを出力してください}",
-  "message: "{#JSONデータを修正していなければ「修正は行っていません。」、修正を行った場合は修正内容を具体的に出力してください}",
+  "results": [
+   "{レビュー項目1.の結果を"true" or "false"で出力してください}",
+   "{レビュー項目2.の結果を"true" or "false"で出力してください}",
+   "{レビュー項目3.の結果を"true" or "false"で出力してください}",
+   "{レビュー項目4.の結果を"true" or "false"で出力してください}",
+   "{レビュー項目5.の結果を"true" or "false"で出力してください}"
+  ],
+  "messages: [
+   "{レビュー項目1.の修正内容を「部品番号[{不足している部品番号}]が出力されていませんでした。部品番号[{不足している部品番号}]を追加しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}",
+   "{レビュー項目2.の修正内容を「項目[{欠落している項目}]が欠落しています。項目[{欠落している項目}]に[{追加した値}]を追加しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}",
+   "{レビュー項目3.の修正内容を「項目[{指定フォーマットになっていない項目}]の[{指定フォーマットでない値}]がフォーマットが誤っています。[{修正した値}]に修正しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}",
+   "{レビュー項目4.の修正内容を「{余分な情報の内容}は存在しない情報です。削除しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}",
+   "{レビュー項目5.の修正内容を「[{部品番号}]と[{認定試験用ビーグル}]は正しいペアではありません。[{修正した部品番号}]と[{修正した認定試験用ビーグル}]に修正しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}"
+  ],
   "columns": ["FPCN番号", "発行日", "部品番号", "認定試験用ビークル"],
   "data": [
     ["FPCN12345", "2024/01/20", "X1X.X3", "Y1Y2Y3"],
@@ -214,6 +230,27 @@ system_prompt3 = """
 def login(username, password):
     return username == "demo" and password == "demo2024"
 
+# Extract Data押下時セッションステート更新
+def update_state(text, formatted_data, df):
+    st.session_state.text = text
+    st.session_state.formatted_data = formatted_data
+    st.session_state.data_df = df
+def update_state_check(check_result_json, is_download):
+    st.session_state.check_result_json = check_result_json
+    st.session_state.is_download = is_download
+
+def delete_state():
+    if "text" in st.session_state:
+        del st.session_state["text"]
+    if "formatted_data" in st.session_state:
+        del st.session_state["formatted_data"]
+    if "data_df" in st.session_state:
+        del st.session_state["data_df"]
+    if "check_result_json" in st.session_state:
+        del st.session_state["check_result_json"]
+    if "is_download" in st.session_state:
+        del st.session_state["is_download"]
+
 
 # セッションステートにログイン状態を保持
 if "logged_in" not in st.session_state:
@@ -251,11 +288,7 @@ else:
 
     # 変換ボタン
     if uploaded_file is not None:
-        if st.button("Extract Data"):
-
-            if "response_json" in st.session_state:
-                del st.session_state["response_json"]
-
+        if st.button("Extract Data", on_click=delete_state):
             # スピナーを表示して実行中を知らせる
             with st.spinner("Processing..."):
                 # PDFファイルの読み込み
@@ -271,15 +304,12 @@ else:
                 # with open("system_prompt.txt", "r") as file:
                 #     system_prompt = file.read()
 
-                # PDFファイルのテキストをセッションステートに格納
-                st.session_state.text = text
-
                 # OpenAI APIを呼び出してテキストを処理
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"以下は製品変更通知（PCN）やPDFドキュメントの内容です:\n{st.session_state.text}"},
+                        {"role": "user", "content": f"以下は製品変更通知（PCN）やPDFドキュメントの内容です:\n{text}"},
                     ],
                 )
 
@@ -312,8 +342,7 @@ else:
                 # セッションステート用にJSONフォーマット変換
                 formatted_data = parsed_json
                 # 結果をセッションステートに保持
-                st.session_state.formatted_data = formatted_data
-                st.session_state.data_df = df
+                update_state(text, formatted_data, df)
 
             # スピナーが終了し、成功メッセージを表示
             st.success("Conversion completed!")
@@ -328,17 +357,21 @@ else:
 
     if "text" in st.session_state and st.session_state.text and "formatted_data" in st.session_state and st.session_state.formatted_data:
         if st.button("Data Check"):
-            if "check_result_json" in st.session_state:
-                del st.session_state["check_result_json"]
             with st.spinner("Checking..."):
                 try:
+                    # 初回フラグ
+                    json_data = st.session_state.formatted_data
+                    if "check_result_json" in st.session_state:
+                        # 前回でデータチェックで修正したJSON
+                        json_data = st.session_state.check_result_json
+
                     # OpenAI APIを呼び出してテキストを処理
                     check_result = client.chat.completions.create(
                         model="gpt-4o",
                         messages=[
                             {"role": "system", "content": system_prompt2},
                             {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}\n"},
-                            {"role": "user", "content": f"以下はJSONデータです:\n{st.session_state.formatted_data}\n"},
+                            {"role": "user", "content": f"以下はJSONデータです:\n{json_data}\n"},
                             {"role": "user", "content": f"JSONデータは以下のプロンプトで作成されました。:\n{system_prompt}\n"},
                             {"role": "user", "content": reminder_prompt},
                         ],
@@ -349,51 +382,26 @@ else:
                     # JSON文字列をパース
                     parsed_check_result_json = json.loads(check_result_json)
 
-                    result = parsed_check_result_json["result"]
-                    message = [parsed_check_result_json["message"]]
+                    results = parsed_check_result_json["results"]
+                    messages = [parsed_check_result_json["messages"]]
                     columns_list = parsed_check_result_json["columns"]
                     data_list = parsed_check_result_json["data"]
                     new_data = {"columns": columns_list, "data": data_list}
-                    if result == "false":
-                        for i in range(2):
-                            print(f"リトライ{i}回目です。")
-                            check_result = client.chat.completions.create(
-                                model="gpt-4o",
-                                messages=[
-                                    {"role": "system", "content": system_prompt2},
-                                    {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}\n"},
-                                    {"role": "user", "content": f"以下はJSONデータです:\n{new_data}\n"},
-                                    {"role": "user", "content": f"JSONデータは以下のプロンプトで作成されました。:\n{system_prompt}\n"},
-                                    {"role": "user", "content": reminder_prompt},
-                                ],
-                                temperature=0.1
-                            )
-                            # JSON形式でのレスポンスを取得
-                            check_result_json = check_result.choices[0].message.content
-                            parsed_check_result_json = json.loads(check_result_json)
-                            # 各項目取得
-                            result = parsed_check_result_json["result"]
-                            message.append(parsed_check_result_json["message"])
-                            columns_list = parsed_check_result_json["columns"]
-                            data_list = parsed_check_result_json["data"]
-                            new_data = {"columns": columns_list, "data": data_list}
-
-                    fix_df = pd.DataFrame(message, columns=["修正内容"])
-                    st.dataframe(fix_df)
-                    # セッションステートでチェック結果を格納
-                    st.session_state.check_result_json = parsed_check_result_json
-
-                    if result == "true":
-                        # チェック結果OK
-                        st.success("Data Check completed!")
-                        # セッションステートでダウンロード表示可否を格納
-                        st.session_state.is_download = True
-                    else:
+                    # Excelダウンロード可否
+                    is_download = True
+                    if "false" in results:
                         # チェック結果NG
                         st.error("Data Check completed!")
-                        # セッションステートでチェック結果を格納
-                        st.session_state.check_result_json = parsed_check_result_json
-                        st.session_state.is_download = False
+                        fix_df = pd.DataFrame(messages, columns=["出力情報が不足","値の欠落","指定フォーマット","余分な情報","ペアの正確性"])
+                        st.dataframe(fix_df)
+                        is_download = False
+                    else:
+                        # チェック結果OK
+                        st.success("Data Check completed!")
+                        st.write("チェックした結果、問題ありませんでした。")
+                    # セッションステートでチェック結果を格納
+                    update_state_check(new_data, is_download)
+
                 except OpenAIError as e:
                     st.error(f"OpenAI APIの呼び出しに失敗しました: {e}")
                     st.write("API呼び出しエラーが発生しました。")
