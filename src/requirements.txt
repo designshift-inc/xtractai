@@ -3,3 +3,7 @@ openai
 PyPDF2
 pandas
 xlsxwriter
+opencv-python
+opencv-contrib-python
+numpy
+pillow
