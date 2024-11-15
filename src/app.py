@@ -130,7 +130,7 @@ system_prompt2 = """
 
 # 出力フォーマット
 - "results"にはレビュー項目毎の結果を出力してください。
-- "message"にはレビュー項目毎の修正内容を出力してください。
+- "messages"にはレビュー項目毎の修正内容を出力してください。
 - "data"部分は提供されたJSONデータもしくは修正を行ったものを出力してください。
 - 余計なコメントは言わず、jsonデータのみ出力してください。
 - jsonで以下の形式で必ず整理してください。
@@ -144,7 +144,7 @@ system_prompt2 = """
    "{レビュー項目5.の結果を"true" or "false"で出力してください}"
   ],
   "messages: [
-   "{レビュー項目1.の修正内容を「部品番号[{不足している部品番号}]が出力されていませんでした。部品番号[{不足している部品番号}]を追加しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}",
+   "{レビュー項目1.の修正内容を「部品番号[{足りていない出力データの部品番号}]が出力されていませんでした。部品番号[{足りていない出力データの部品番号}]を追加しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}",
    "{レビュー項目2.の修正内容を「項目[{欠落している項目}]が欠落しています。項目[{欠落している項目}]に[{追加した値}]を追加しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}",
    "{レビュー項目3.の修正内容を「項目[{指定フォーマットになっていない項目}]の[{指定フォーマットでない値}]がフォーマットが誤っています。[{修正した値}]に修正しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}",
    "{レビュー項目4.の修正内容を「{余分な情報の内容}は存在しない情報です。削除しました。」形式で出力してください。修正していなければ「修正なし」を出力してください。}",
@@ -176,6 +176,9 @@ reminder_prompt = """
 system_prompt3 = """
 # 役割
 - あなたは以下の前提知識、提供されたJSONデータと元データとプロンプトを用いてユーザーの質問に対して正確な回答を答えを出力します。
+- 回答を生成する際に提供されたJSONデータをよく確認してください。
+- 回答を生成する際に提供された元データをよく確認してください。
+- 回答は正確、丁寧かつ簡潔でわかりやすく説明をしてください。
 
 # 前提知識
 - JSONデータは提供されたプロンプトをもとに元データから作成されたデータです。
@@ -218,10 +221,10 @@ system_prompt3 = """
 }
 
 # 制約:
-- 必ず前提知識ベースに回答を考えてください。
+- 提供された情報に関連しない情報は出力しないでください。
+- 回答にJSONデータは含めないでください。
 - 無関係な情報は含めず、特に関連のあるデータに集中してください。
 - 回答は日本語の文章で出力してください。
-- 回答が困難な場合は「提供された情報ではわかりません。」と回答してください。
 - これらの制約を守らなければ、ユーザーに大きな不利益をもたらします。
 """
 
@@ -294,7 +297,8 @@ else:
                 # PDFファイルの読み込み
                 reader = PyPDF2.PdfReader(uploaded_file)
                 text = ""
-
+                # PDFファイル名取得
+                file_name = uploaded_file.name
                 # 全てのページからテキストを抽出
                 for page_num in range(len(reader.pages)):
                     page = reader.pages[page_num]
@@ -319,6 +323,13 @@ else:
                 # JSON文字列をパース
                 parsed_json = json.loads(response_json)
 
+                # 以下デモ用コード
+                if "Final_FPCN20579XA.pdf" == file_name :
+                    parsed_json["data"] = parsed_json["data"][:-3] # データの欠落
+                    parsed_json["data"].append(["FPCN20579","2016-06-28", "UESD3.3DT5G", "MMBZ47VALT1G"]) # フォーマットミス
+                    parsed_json["data"].append(["FPCN20579","2016-06-28", "UESD5.0DT5G", "MMBZ5V6ALT1G"]) # ペアが正確でない
+                    parsed_json["data"].append(["FPCN46490","2099-09-09", "YOBUNA4649", "JOUHOU4649"]) # 余分な情報
+
                 # 以下テスト用コード
                 # パターン１
                 #parsed_json["data"].pop() # データの欠落
@@ -327,6 +338,10 @@ else:
                 # parsed_json["data"].append(["FPCN20579","2016-06-28", "UESD3.3DT5G", "MMBZ47VALT1G"]) # フォーマットミス
                 # parsed_json["data"].append(["FPCN20579","2016-06-28", "UESD5.0DT5G", "MMBZ5V6ALT1G"]) # ペアが正確でない
                 # parsed_json["data"].append(["FPCN46490","2099-09-09", "YOBUNA4649", "JOUHOU4649"]) # 余分な情報
+                #parsed_json["data"] = parsed_json["data"][:-2] # データの欠落
+                #parsed_json["data"].append(["FPCN22075ZB","2019/04/21", "SZMMBZ220VALT1G", "SZMMBZ47VALT1G"]) # フォーマットミス
+                #parsed_json["data"].append(["FPCN22075ZB","2019/04/21", "SZMMBZ220VALT1G", "SZMMBZ47VALT1G"]) # ペアが正確でない
+                # parsed_json["data"].append(["FPCN20579","2016/06/28", "UESD6.0T5G", "MMBZ5V6ALT1G"]) # 余分な情報
                 # パターン３
                 #parsed_json["data"] = parsed_json["data"][:-4] # データの欠落
 
@@ -447,8 +462,8 @@ else:
             input_text = st.text_input("Enter the information you want to know")
             if input_text is not None and st.button("Search"):
                 json_data = st.session_state.check_result_json
-                json_data.pop("result", None)
-                json_data.pop("message", None)
+                json_data.pop("results", None)
+                json_data.pop("messages", None)
                 with st.spinner("Searching..."):
                     # OpenAI APIを呼び出してテキストを処理
                     answer_result = client.chat.completions.create(
