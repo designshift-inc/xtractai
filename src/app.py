@@ -7,7 +7,7 @@ import PyPDF2
 import json
 import pandas as pd
 import io  # メモリ上にファイルを保存するために必要
-
+# 再デプロイ
 system_prompt = """
 # 役割:
 - あなたは提供された製品変更通知（PCN）やPDFドキュメントの内容を、以下のキーに従って構造化し、整理されたjsonデータを出力します。
