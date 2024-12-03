@@ -2,7 +2,7 @@ import streamlit as st
 from openai import OpenAI, OpenAIError
 import os
 
-#import config # ローカル実行
+#import src.config as config # ローカル実行
 import PyPDF2
 import json
 import pandas as pd
