@@ -1,8 +1,8 @@
 import streamlit as st
-from openai import OpenAI, OpenAIError
+from openai import OpenAI, OpenAIError, AzureOpenAI
 import os
 
-#import config # ローカル実行
+# import config # ローカル実行
 import PyPDF2
 import json
 import pandas as pd
@@ -48,6 +48,54 @@ jsonで以下の形式で必ず整理してください。
   "columns": ["FPCN番号", "発行日", "部品番号", "認定試験用ビークル"],
   "data": [
     ["FPCNXXXXX", "2024/01/20", "XXX", "YYY"],
+    ...
+  ]
+}
+"""
+
+texas_prompt = """
+# 役割:
+- あなたは提供された製品変更通知（PCN）やPDFドキュメントの内容を、以下のキーに従って構造化し、整理されたjsonデータを出力します。
+
+# 制約:
+- 各キーには該当する情報を正確に埋めてください。
+- PDFの情報がNULLの場合はNULLのまま必ず出力してください。
+- PDFにその情報が含まれていない場合は「N/A」と記載します。
+- 提供された情報を以下のキーの順に従って整理してください。
+- 無関係な情報は含めず、特に関連のあるデータに集中してください。
+- これらの制約を守らなければ、ユーザーに大きな不利益をもたらします。
+
+# キー構造:
+1. PCN番号(PCN Number):  
+   - 説明: 各文書に付与された識別番号を記載。
+   - フォーマット: PCNXXXXX
+   - PCNから始まり、後ろには数字が続きます。
+   - 例:PCN12345
+
+2. 発行日(PCN Date):  
+   - 説明: 文書が発行された日付を記載。
+   - フォーマット: YYYY/MM/DD（例: 2023/12/01）
+
+3. 部品番号(CUSTOMER PART NUMBER):  
+   - 説明: 変更が適用される部品番号を記載。
+   - 部品番号はNULLやnullの可能性があります。
+   - 認定試験用ビーグル(DEVICE)と必ず対応するペアがあります。
+   - 認定試験用ビーグル(DEVICE)と部品番号(CUSTOMER PART NUMBER)は1:nの関係になります。
+
+4. 認定試験用ビークル(DEVICE)
+   - 説明: 品質や性能を確認するためのテスト用部品の番号を記載。
+   - 部品番号(CUSTOMER PART NUMBER)と必ず対応するペアがあります。
+   - 対応する部品番号(CUSTOMER PART NUMBER)はNULLやnullの可能性があります。
+   - 認定試験用ビーグル(DEVICE)と部品番号(CUSTOMER PART NUMBER)は1:nの関係になります。
+
+# 出力フォーマット
+余計なコメントは言わず、jsonデータのみ出力してください。
+jsonで以下の形式で必ず整理してください。
+```で囲んだり、頭にjsonとつけてはいけません。
+{
+  "columns": ["PCN番号", "発行日", "部品番号", "認定試験用ビークル"],
+  "data": [
+    ["PCNXXXXX", "2024/01/20", "XXX", "YYY"],
     ...
   ]
 }
@@ -283,11 +331,24 @@ else:
 
     # config.py から APIキーと Organization ID を取得
     #api_key = config.OPENAI_API_KEY # ローカル実行
-    api_key = st.secrets["openai"]["api_key"] # デプロイ時
-    client = OpenAI(api_key=api_key)
+    #api_key = st.secrets["openai"]["api_key"] # デプロイ時
+    # azure_endpoint = config.AZURE_OPENAI_ENDPOINT # ローカル時(環境変数)
+    # api_key = config.AZURE_OPENAI_KEY # ローカル時(環境変数)
+    azure_endpoint = os.environ["OPENAI_URL"] # デプロイ時(環境変数)
+    api_key = os.environ["OPENAI_KEY"] # デプロイ時(環境変数)
+    # client = OpenAI(api_key=api_key)
+
+    azure_client = AzureOpenAI(
+        azure_endpoint=azure_endpoint,
+        api_key=api_key,
+        api_version="2024-08-01-preview"
+    )
 
     # インプットでPDFファイルをアップロード
     uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
+    publisher_options = ["ON Semiconductor", "Texas Instruments"]
+    # 発行元
+    publisher = st.selectbox("発行元を選択してください", publisher_options)
 
     # 変換ボタン
     if uploaded_file is not None:
@@ -301,20 +362,27 @@ else:
                 file_name = uploaded_file.name
                 # 全てのページからテキストを抽出
                 for page_num in range(len(reader.pages)):
+                    text += f"--------------------------- PDF{page_num+1}ページ目開始 ---------------------------" + '\n'
                     page = reader.pages[page_num]
-                    text += page.extract_text()
+                    text += page.extract_text() + '\n'
 
                 # system_prompt.txt からプロンプトを読み込む
                 # with open("system_prompt.txt", "r") as file:
                 #     system_prompt = file.read()
 
+                if publisher == "ON Semiconductor":
+                    messages = [{"role": "system", "content": system_prompt}]
+                elif publisher == "Texas Instruments":
+                    messages = [{"role": "system", "content": texas_prompt}]
+                #st.write("PDFの内容:",text)
+                #print(text)
+                messages.append({"role": "user", "content": f"以下は製品変更通知（PCN）やPDFドキュメントの内容です:\n{text}"})
                 # OpenAI APIを呼び出してテキストを処理
-                response = client.chat.completions.create(
+                response = azure_client.chat.completions.create(
                     model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"以下は製品変更通知（PCN）やPDFドキュメントの内容です:\n{text}"},
-                    ],
+                    #model="gpt-4o",
+                    messages=messages,
+                    temperature=0.1
                 )
 
                 # JSON形式でのレスポンスを取得
@@ -381,7 +449,7 @@ else:
                         json_data = st.session_state.check_result_json
 
                     # OpenAI APIを呼び出してテキストを処理
-                    check_result = client.chat.completions.create(
+                    check_result = azure_client.chat.completions.create(
                         model="gpt-4o",
                         messages=[
                             {"role": "system", "content": system_prompt2},
@@ -466,7 +534,7 @@ else:
                 json_data.pop("messages", None)
                 with st.spinner("Searching..."):
                     # OpenAI APIを呼び出してテキストを処理
-                    answer_result = client.chat.completions.create(
+                    answer_result = azure_client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": system_prompt3},
