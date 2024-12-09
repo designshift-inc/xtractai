@@ -338,11 +338,17 @@ else:
     api_key = os.environ["OPENAI_KEY"] # デプロイ時(環境変数)
     # client = OpenAI(api_key=api_key)
 
-    azure_client = AzureOpenAI(
-        azure_endpoint=azure_endpoint,
-        api_key=api_key,
-        api_version="2024-08-01-preview"
-    )
+    try:
+        azure_client = AzureOpenAI(
+            azure_endpoint=azure_endpoint,
+            api_key=api_key,
+            api_version="2024-08-01-preview"
+        )
+    except Exception as e:
+        # 他の予期しないエラー
+        st.write("クライアント エラー")
+        st.write("エンドポイント", azure_endpoint)
+        st.write(f"An unexpected error occurred: {e}")
 
     # インプットでPDFファイルをアップロード
     uploaded_file = st.file_uploader("Upload a PDF file", type="pdf")
@@ -378,12 +384,18 @@ else:
                 #print(text)
                 messages.append({"role": "user", "content": f"以下は製品変更通知（PCN）やPDFドキュメントの内容です:\n{text}"})
                 # OpenAI APIを呼び出してテキストを処理
-                response = azure_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    #model="gpt-4o",
-                    messages=messages,
-                    temperature=0.1
-                )
+                try:
+                    response = azure_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        #model="gpt-4o",
+                        messages=messages,
+                        temperature=0.1
+                    )
+                except Exception as e:
+                    # 他の予期しないエラー
+                    st.write("抽出エラー")
+                    st.write("エンドポイント", azure_endpoint)
+                    st.write(f"An unexpected error occurred: {e}")
 
                 # JSON形式でのレスポンスを取得
                 response_json = response.choices[0].message.content
