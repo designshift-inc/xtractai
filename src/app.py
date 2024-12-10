@@ -7,6 +7,20 @@ import PyPDF2
 import json
 import pandas as pd
 import io  # メモリ上にファイルを保存するために必要
+import logging
+
+# ロガー作成
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # 必要に応じてDEBUGやERRORに変更
+# コンソールハンドラーを作成
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+# フォーマッターを設定
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+# ハンドラーをロガーに追加
+logger.addHandler(console_handler)
+
 system_prompt = """
 # 役割:
 - あなたは提供された製品変更通知（PCN）やPDFドキュメントの内容を、以下のキーに従って構造化し、整理されたjsonデータを出力します。
@@ -278,7 +292,7 @@ system_prompt3 = """
 
 # シンプルなログイン機能
 def login(username, password):
-    print("認証開始")
+    logger.info("認証開始")
     return username == "demo" and password == "demo2024"
 
 # Extract Data押下時セッションステート更新
@@ -360,6 +374,7 @@ else:
     if uploaded_file is not None:
         if st.button("Extract Data", on_click=delete_state):
             # スピナーを表示して実行中を知らせる
+            logger.warning("データ抽出開始")
             with st.spinner("Processing..."):
                 # PDFファイルの読み込み
                 reader = PyPDF2.PdfReader(uploaded_file)
