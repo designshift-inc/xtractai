@@ -8,18 +8,23 @@ import json
 import pandas as pd
 import io  # メモリ上にファイルを保存するために必要
 import logging
+import sys
 
 # ロガー作成
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)  # 必要に応じてDEBUGやERRORに変更
-# コンソールハンドラーを作成
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
+# 標準出力用のロガー
 # フォーマッターを設定
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
+stdout_handler = logging.StreamHandler(sys.stdout)
+stdout_handler.setLevel(logging.INFO)
+stderr_handler = logging.StreamHandler(sys.stderr)
+stderr_handler.setLevel(logging.ERROR)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # 必要に応じてDEBUGやERRORに変更
+stdout_handler.setFormatter(formatter)
+stderr_handler.setFormatter(formatter)
 # ハンドラーをロガーに追加
-logger.addHandler(console_handler)
+logger.addHandler(stdout_handler)
+logger.addHandler(stderr_handler)
 
 system_prompt = """
 # 役割:
