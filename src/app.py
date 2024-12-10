@@ -278,6 +278,7 @@ system_prompt3 = """
 
 # シンプルなログイン機能
 def login(username, password):
+    print("認証開始")
     return username == "demo" and password == "demo2024"
 
 # Extract Data押下時セッションステート更新
