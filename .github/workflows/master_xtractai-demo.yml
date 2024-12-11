@@ -42,6 +42,7 @@ jobs:
           path: |
             release.zip
             !venv/
+            .streamlit
           include-hidden-files: true
 
   deploy:
