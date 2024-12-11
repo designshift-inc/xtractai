@@ -67,4 +67,4 @@ jobs:
           app-name: 'xtractai-demo'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_186C31BB266B4C82B64EA4DD843F6197 }}
-          package: '.'
+          include-hidden-files: true
