@@ -1,6 +1,7 @@
+import traceback
 import streamlit as st
 from openai import AzureOpenAI
-#import config # ローカル実行
+# import config # ローカル実行
 import PyPDF2
 import json
 import pandas as pd
@@ -15,10 +16,11 @@ import prompt
 logger = setup_logging()
 
 # Extract Data押下時セッションステート更新
-def update_state(text, formatted_data, df):
+def update_state(text, formatted_data, df, publisher):
     st.session_state.text = text
     st.session_state.formatted_data = formatted_data
     st.session_state.data_df = df
+    st.session_state.publisher = publisher
 def update_state_check(check_result_json, is_download):
     st.session_state.check_result_json = check_result_json
     st.session_state.is_download = is_download
@@ -34,6 +36,8 @@ def delete_state():
         del st.session_state["check_result_json"]
     if "is_download" in st.session_state:
         del st.session_state["is_download"]
+    if "publisher" in st.session_state:
+        del st.session_state["publisher"]
 
 def xtract_page():
     # ログイン後のコンテンツ表示
@@ -57,8 +61,9 @@ def xtract_page():
         )
     except Exception as e:
         # 他の予期しないエラー
-        logger.error("OpenAI Client Error")
-        logger.error(f"{e}")
+        error_traceback = traceback.format_exc()
+        logger.error(f"OpenAI Client Error:{e}")
+        logger.error(error_traceback)
         st.error("OpenAI Client Error")
 
     # インプットでPDFファイルをアップロード
@@ -71,7 +76,6 @@ def xtract_page():
     if uploaded_file is not None:
         if st.button("Extract Data", on_click=delete_state):
             # スピナーを表示して実行中を知らせる
-            logger.warning("データ抽出開始")
             with st.spinner("Processing..."):
                 # PDFファイルの読み込み
                 reader = PyPDF2.PdfReader(uploaded_file)
@@ -89,8 +93,10 @@ def xtract_page():
                 #     system_prompt = file.read()
 
                 if publisher == "ON Semiconductor":
+                    logger.info("ON Semiconductorデータ抽出")
                     messages = [{"role": "system", "content": prompt.xtract.ON_SEMICONDUCTOR}]
                 elif publisher == "Texas Instruments":
+                    logger.info("Texas Instrumentsデータ抽出")
                     messages = [{"role": "system", "content": prompt.xtract.TEXAS_INSTRUMENTS}]
                 #st.write("PDFの内容:",text)
                 #print(text)
@@ -143,13 +149,18 @@ def xtract_page():
                     # セッションステート用にJSONフォーマット変換
                     formatted_data = parsed_json
                     # 結果をセッションステートに保持
-                    update_state(text, formatted_data, df)
+                    update_state(text, formatted_data, df, publisher)
                     # スピナーが終了し、成功メッセージを表示
                     st.success("Conversion completed!")
+                except json.decoder.JSONDecodeError as e:
+                    logger.error(f"Extract Data Decode Error:{e}")
+                    logger.error(response_json)
+                    st.error("Decode error")
                 except Exception as e:
                     # 他の予期しないエラー
-                    logger.error("Extract Data Error")
-                    logger.error(f"{e}")
+                    error_traceback = traceback.format_exc()
+                    logger.error(f"Extract Data Error:{e}")
+                    logger.error(error_traceback)
                     st.error("Conversion error")
 
     # 整理されたJSON表示用の空エリアを作成
@@ -171,14 +182,17 @@ def xtract_page():
                         json_data = st.session_state.check_result_json
 
                     # OpenAI APIを呼び出してテキストを処理
-                    if publisher == "ON Semiconductor":
+                    if st.session_state.publisher == "ON Semiconductor":
+                        logger.info("ON Semiconductorレビュー")
                         xtract_prompt = prompt.xtract.ON_SEMICONDUCTOR
                         review_prompt = prompt.review.ON_SEMICONDUCTOR
-                    elif publisher == "Texas Instruments":
+                    elif st.session_state.publisher == "Texas Instruments":
+                        logger.info("Texas Instrumentsレビュー")
                         xtract_prompt = prompt.xtract.TEXAS_INSTRUMENTS
                         review_prompt = prompt.review.TEXAS_INSTRUMENTS
                     check_result = azure_client.chat.completions.create(
                         model="gpt-4o",
+                        #model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": review_prompt},
                             {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}\n"},
@@ -212,10 +226,15 @@ def xtract_page():
                         st.write("チェックした結果、問題ありませんでした。")
                     # セッションステートでチェック結果を格納
                     update_state_check(new_data, is_download)
+                except json.decoder.JSONDecodeError as e:
+                    logger.error(f"Data Check Decode Error:{e}")
+                    logger.error(check_result_json)
+                    st.error("Decode error")
                 except Exception as e:
                     # 他の予期しないエラー
-                    logger.error("Data Check Error")
-                    logger.error(f"{e}")
+                    error_traceback = traceback.format_exc()
+                    logger.error(f"Data Check Error:{e}")
+                    logger.error(error_traceback)
                     st.error("Data Check Error")
 
         # チェック結果表示用の空エリアを作成
@@ -269,21 +288,32 @@ def xtract_page():
                 json_data.pop("results", None)
                 json_data.pop("messages", None)
                 with st.spinner("Searching..."):
-                    # OpenAI APIを呼び出してテキストを処理
-                    if publisher == "ON Semiconductor":
-                        xtract_prompt = prompt.xtract.ON_SEMICONDUCTOR
-                    elif publisher == "Texas Instruments":
-                        xtract_prompt = prompt.xtract.TEXAS_INSTRUMENTS
-                    answer_result = azure_client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": prompt.chat.CHAT},
-                            {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}"},
-                            {"role": "user", "content": f"以下はJSONデータです:\n{json_data}"},
-                            {"role": "user", "content": f"JSONデータは以下のプロンプトで作成されました。:\n{xtract_prompt}\n"},
-                            {"role": "user", "content": f"以下はユーザーが欲しい情報です:\n{input_text}"},
-                        ],
-                    )
-                    # JSON形式でのレスポンスを取得
-                    answer_result = answer_result.choices[0].message.content
-                    st.write("回答:", answer_result)
+                    try:
+                        # OpenAI APIを呼び出してテキストを処理
+                        if st.session_state.publisher == "ON Semiconductor":
+                            xtract_prompt = prompt.xtract.ON_SEMICONDUCTOR
+                        elif st.session_state.publisher == "Texas Instruments":
+                            xtract_prompt = prompt.xtract.TEXAS_INSTRUMENTS
+                        answer_result = azure_client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[
+                                {"role": "system", "content": prompt.chat.CHAT},
+                                {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}"},
+                                {"role": "user", "content": f"以下はJSONデータです:\n{json_data}"},
+                                {"role": "user", "content": f"JSONデータは以下のプロンプトで作成されました。:\n{xtract_prompt}\n"},
+                                {"role": "user", "content": f"以下はユーザーが欲しい情報です:\n{input_text}"},
+                            ],
+                        )
+                        # JSON形式でのレスポンスを取得
+                        answer_result = answer_result.choices[0].message.content
+                        st.write("回答:", answer_result)
+                    except json.decoder.JSONDecodeError as e:
+                        logger.error(f"Data Search Decode Error:{e}")
+                        logger.error(answer_result)
+                        st.error("Decode error")
+                    except Exception as e:
+                        # 他の予期しないエラー
+                        error_traceback = traceback.format_exc()
+                        logger.error(f"Data Search Error:{e}")
+                        logger.error(error_traceback)
+                        st.error("Data Search Error")
