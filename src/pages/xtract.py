@@ -311,12 +311,12 @@ def xtract_page():
                             ],
                         )
                         # JSON形式でのレスポンスを取得
-                        answer_result = answer_result.choices[0].message.content
+                        answer = answer_result.choices[0].message.content
                         finish_reason = answer_result.choices[0].finish_reason
-                        st.write("回答:", answer_result)
+                        st.write("回答:", answer)
                     except json.decoder.JSONDecodeError as e:
                         logger.error(f"Data Search Decode Error:{e}")
-                        logger.error(answer_result)
+                        logger.error(answer)
                         if finish_reason == "length":
                             st.error("Data extraction limit exceeded")
                         else:
