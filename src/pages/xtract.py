@@ -98,20 +98,20 @@ def xtract_page():
                 elif publisher == "Texas Instruments":
                     logger.info("Texas Instrumentsデータ抽出")
                     messages = [{"role": "system", "content": prompt.xtract.TEXAS_INSTRUMENTS}]
-                #st.write("PDFの内容:",text)
                 #print(text)
                 messages.append({"role": "user", "content": f"以下は製品変更通知（PCN）やPDFドキュメントの内容です:\n{text}"})
+                messages.append({"role": "user", "content": prompt.xtract.REMINDER})
                 # OpenAI APIを呼び出してテキストを処理
                 try:
                     response = azure_client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        #model="gpt-4o",
+                        #model="gpt-4o-mini",
+                        model="gpt-4o",
                         messages=messages,
-                        temperature=0.1
+                        temperature=0
                     )
                     # JSON形式でのレスポンスを取得
                     response_json = response.choices[0].message.content
-
+                    finish_reason = response.choices[0].finish_reason
                     # JSON文字列をパース
                     parsed_json = json.loads(response_json)
 
@@ -130,12 +130,12 @@ def xtract_page():
                     # parsed_json["data"].append(["FPCN20579","2016-06-28", "UESD3.3DT5G", "MMBZ47VALT1G"]) # フォーマットミス
                     # parsed_json["data"].append(["FPCN20579","2016-06-28", "UESD5.0DT5G", "MMBZ5V6ALT1G"]) # ペアが正確でない
                     # parsed_json["data"].append(["FPCN46490","2099-09-09", "YOBUNA4649", "JOUHOU4649"]) # 余分な情報
-                    #parsed_json["data"] = parsed_json["data"][:-2] # データの欠落
-                    #parsed_json["data"].append(["FPCN22075ZB","2019/04/21", "SZMMBZ220VALT1G", "SZMMBZ47VALT1G"]) # フォーマットミス
-                    #parsed_json["data"].append(["FPCN22075ZB","2019/04/21", "SZMMBZ220VALT1G", "SZMMBZ47VALT1G"]) # ペアが正確でない
-                    # parsed_json["data"].append(["FPCN20579","2016/06/28", "UESD6.0T5G", "MMBZ5V6ALT1G"]) # 余分な情報
+                    # parsed_json["data"] = parsed_json["data"][:-2] # データの欠落
+                    # parsed_json["data"].append(["PCN20240729003.0","2023-06-01", "null", "LMR62014XMFE/NOPB"]) # フォーマットミス
+                    # parsed_json["data"].append(["PCN20240729003.0","2024-07-01", "null", "TIGAUPEA1234"]) # ペアが正確でない
+                    # parsed_json["data"].append(["FPCN46490","2099-09-09", "YOBUNA4649", "JOUHOU4649"]) # 余分な情報
                     # パターン３
-                    #parsed_json["data"] = parsed_json["data"][:-4] # データの欠落
+                    #parsed_json["data"] = parsed_json["data"][:-9] # データの欠落
 
                     # DataFrameに変換
                     df = pd.DataFrame(parsed_json["data"], columns=parsed_json["columns"])
@@ -155,7 +155,10 @@ def xtract_page():
                 except json.decoder.JSONDecodeError as e:
                     logger.error(f"Extract Data Decode Error:{e}")
                     logger.error(response_json)
-                    st.error("Decode error")
+                    if finish_reason == "length":
+                        st.error("Data extraction limit exceeded")
+                    else:
+                        st.error("Decode error")
                 except Exception as e:
                     # 他の予期しないエラー
                     error_traceback = traceback.format_exc()
@@ -195,18 +198,18 @@ def xtract_page():
                         #model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": review_prompt},
-                            {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}\n"},
                             {"role": "user", "content": f"以下はJSONデータです:\n{json_data}\n"},
-                            {"role": "user", "content": f"JSONデータは以下のプロンプトで作成されました。:\n{xtract_prompt}\n"},
+                            {"role": "user", "content": f"以下は元データです:\n{st.session_state.text}\n"},
+                            {"role": "user", "content": f"以下はプロンプトです:\n{xtract_prompt}\n"},
                             {"role": "user", "content": prompt.review.REMINDER},
                         ],
                         temperature=0.1
                     )
                     # JSON形式でのレスポンスを取得
                     check_result_json = check_result.choices[0].message.content
+                    finish_reason = check_result.choices[0].finish_reason
                     # JSON文字列をパース
                     parsed_check_result_json = json.loads(check_result_json)
-
                     results = parsed_check_result_json["results"]
                     messages = [parsed_check_result_json["messages"]]
                     columns_list = parsed_check_result_json["columns"]
@@ -229,7 +232,10 @@ def xtract_page():
                 except json.decoder.JSONDecodeError as e:
                     logger.error(f"Data Check Decode Error:{e}")
                     logger.error(check_result_json)
-                    st.error("Decode error")
+                    if finish_reason == "length":
+                        st.error("Data extraction limit exceeded")
+                    else:
+                        st.error("Decode error")
                 except Exception as e:
                     # 他の予期しないエラー
                     error_traceback = traceback.format_exc()
@@ -306,11 +312,15 @@ def xtract_page():
                         )
                         # JSON形式でのレスポンスを取得
                         answer_result = answer_result.choices[0].message.content
+                        finish_reason = answer_result.choices[0].finish_reason
                         st.write("回答:", answer_result)
                     except json.decoder.JSONDecodeError as e:
                         logger.error(f"Data Search Decode Error:{e}")
                         logger.error(answer_result)
-                        st.error("Decode error")
+                        if finish_reason == "length":
+                            st.error("Data extraction limit exceeded")
+                        else:
+                            st.error("Decode error")
                     except Exception as e:
                         # 他の予期しないエラー
                         error_traceback = traceback.format_exc()
